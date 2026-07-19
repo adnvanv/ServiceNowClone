@@ -276,10 +276,13 @@ public class RecordService implements RecordQuery.Executor {
             }
             Optional<FieldDefinition> fd = cache.field(table, f);
             if (fd.isPresent() && fd.get().type() == FieldType.CHOICE && record.get(f) != null) {
-                cache.choices(table, f).stream()
-                        .filter(c -> c.value().equals(record.get(f).toString()))
+                String raw = record.get(f).toString();
+                String label = cache.choices(table, f).stream()
+                        .filter(c -> c.value().equals(raw))
                         .findFirst()
-                        .ifPresent(c -> record.put(f + "__display", c.label()));
+                        .map(ChoiceDefinition::label)
+                        .orElse(raw); // unknown value: fall back to the raw value
+                record.put(f + "__display", label);
             }
         }
     }
