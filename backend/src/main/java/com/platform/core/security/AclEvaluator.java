@@ -100,13 +100,33 @@ public class AclEvaluator {
             if (rule.condition() == null || rule.condition() instanceof QueryNode.MatchAll) {
                 return new AclDecision.Allow();
             }
-            conditions.add(rule.condition());
+            conditions.add(resolveDynamicValues(rule.condition(), user));
         }
         if (conditions.isEmpty()) {
             return new AclDecision.Deny();
         }
         return new AclDecision.Restrict(
                 conditions.size() == 1 ? conditions.get(0) : new QueryNode.Or(conditions));
+    }
+
+    /**
+     * ACL conditions may use the dynamic value "@me", which resolves to the
+     * current user's sys_id at evaluation time — this is what makes rules
+     * like "read only records assigned to you" expressible as data
+     * (ServiceNow uses javascript:gs.getUserID() for the same job).
+     */
+    static QueryNode resolveDynamicValues(QueryNode node, UserContext user) {
+        return switch (node) {
+            case QueryNode.MatchAll m -> m;
+            case QueryNode.And and -> new QueryNode.And(
+                    and.children().stream().map(c -> resolveDynamicValues(c, user)).toList());
+            case QueryNode.Or or -> new QueryNode.Or(
+                    or.children().stream().map(c -> resolveDynamicValues(c, user)).toList());
+            case QueryNode.Condition c -> "@me".equals(c.rawValue())
+                    ? new QueryNode.Condition(c.field(), c.operator(),
+                            user.userId() != null ? user.userId().toString() : null)
+                    : c;
+        };
     }
 
     // ------------------------------------------------------------------
@@ -164,7 +184,7 @@ public class AclEvaluator {
                 continue;
             }
             if (rule.condition() == null || record == null
-                    || matcher.matches(table, rule.condition(), record)) {
+                    || matcher.matches(table, resolveDynamicValues(rule.condition(), user), record)) {
                 return true;
             }
         }
