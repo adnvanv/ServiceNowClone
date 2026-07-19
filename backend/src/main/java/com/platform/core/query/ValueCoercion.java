@@ -78,6 +78,46 @@ public final class ValueCoercion {
         return LocalDate.parse(raw).atStartOfDay().atOffset(ZoneOffset.UTC);
     }
 
+    /**
+     * Coerce a value as it arrives from a JSON body (already typed by
+     * Jackson: String, Number, Boolean or null) into the bind value for a
+     * field. Empty strings on non-text fields mean "clear the value" — HTML
+     * forms send "" rather than null.
+     */
+    public static Object coerceJson(FieldType type, Object value, String fieldForError) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof String s) {
+            boolean textual = type == FieldType.STRING || type == FieldType.TEXT || type == FieldType.CHOICE;
+            if (s.isEmpty() && !textual) {
+                return null;
+            }
+            return coerce(type, s, fieldForError);
+        }
+        if (value instanceof Boolean b) {
+            if (type == FieldType.BOOLEAN) {
+                return b;
+            }
+            throw jsonTypeMismatch(type, value, fieldForError);
+        }
+        if (value instanceof Number n) {
+            return switch (type) {
+                case INTEGER -> n.longValue();
+                case DECIMAL -> new BigDecimal(n.toString());
+                default -> throw jsonTypeMismatch(type, value, fieldForError);
+            };
+        }
+        throw jsonTypeMismatch(type, value, fieldForError);
+    }
+
+    private static BadRequestException jsonTypeMismatch(FieldType type, Object value, String field) {
+        return new BadRequestException(
+                "Invalid value for field '" + field + "'",
+                value + " (" + value.getClass().getSimpleName() + ") cannot be stored as "
+                        + type.internalType());
+    }
+
     /** The logical type of a base column, for coercion and WHERE compilation. */
     public static FieldType baseColumnType(String element) {
         return switch (element) {

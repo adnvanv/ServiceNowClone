@@ -51,6 +51,7 @@ public class RecordQuery {
     private List<String> fields;
     private Integer limit;
     private Integer offset;
+    private boolean displayValues;
 
     private RecordQuery(String tableName) {
         this.tableName = tableName;
@@ -96,6 +97,12 @@ public class RecordQuery {
 
     public RecordQuery offset(int offset) {
         this.offset = offset;
+        return this;
+    }
+
+    /** Also resolve display values for reference and choice fields. */
+    public RecordQuery withDisplayValues(boolean displayValues) {
+        this.displayValues = displayValues;
         return this;
     }
 
@@ -147,5 +154,9 @@ public class RecordQuery {
 
     public Integer offsetValue() {
         return offset;
+    }
+
+    public boolean displayValues() {
+        return displayValues;
     }
 }
