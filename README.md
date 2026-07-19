@@ -9,6 +9,24 @@ engine's trick), built small enough to read in an afternoon.
 Create a table called `incident`, add a `priority` field, and one second
 later you can query it over REST and edit it in the UI.
 
+## Screenshots
+
+The list view — columns from the dictionary, display values resolved, the
+filter's encoded query in an editable box:
+
+![List view](docs/screenshots/list.png)
+
+The form view — every input chosen by `internal_type`, inherited fields
+tagged with the class that declared them, reference typeahead, mandatory
+markers:
+
+![Form view](docs/screenshots/form.png)
+
+Schema admin — define a table and its fields; it is live the moment you
+click create:
+
+![Schema admin](docs/screenshots/schema-admin.png)
+
 ## Quickstart
 
 ```bash
