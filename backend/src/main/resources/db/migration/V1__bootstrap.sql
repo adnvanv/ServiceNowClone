@@ -65,12 +65,20 @@ create table sys_choice (
 -- ---------------------------------------------------------------------------
 -- Users, groups, roles.
 -- ---------------------------------------------------------------------------
+-- sys_user carries the record-layer base columns (sys_mod_count,
+-- sys_class_name) on top of the audit set because, like in ServiceNow, it is
+-- also an ordinary platform table: the seeder registers it in sys_db_object
+-- so user tables can hold reference fields pointing at users. password_hash
+-- is deliberately never registered in sys_dictionary, which keeps it
+-- invisible to the record API.
 create table sys_user (
     sys_id          uuid primary key default gen_random_uuid(),
     sys_created_on  timestamptz not null default now(),
     sys_created_by  text,
     sys_updated_on  timestamptz not null default now(),
     sys_updated_by  text,
+    sys_mod_count   integer not null default 0,
+    sys_class_name  varchar(64) not null default 'sys_user',
     user_name       text not null unique,
     password_hash   text not null,
     first_name      text,
