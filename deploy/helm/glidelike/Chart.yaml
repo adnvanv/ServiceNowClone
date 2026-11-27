@@ -1,0 +1,11 @@
+apiVersion: v2
+name: glidelike
+description: >-
+  Glidelike — a metadata-driven application platform (ServiceNow-style).
+  Spring Boot backend (horizontally scaled), nginx-served React frontend,
+  and PostgreSQL via the CloudNativePG operator or an external database (RDS).
+type: application
+version: 0.1.0
+appVersion: "0.0.1"
+keywords: [servicenow, metadata, platform, spring-boot, postgres]
+home: https://github.com/adnvanv/ServiceNowClone

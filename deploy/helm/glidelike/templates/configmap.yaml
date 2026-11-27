@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "glidelike.fullname" . }}-config
+  labels:
+    {{- include "glidelike.labels" . | nindent 4 }}
+data:
+  DB_URL: {{ include "glidelike.jdbcUrl" . | quote }}
+  PLATFORM_SEED_DEMO_DATA: {{ .Values.config.seedDemoData | quote }}
+  PLATFORM_JWT_EXPIRY_MINUTES: {{ .Values.config.jwtExpiryMinutes | quote }}
+  PLATFORM_SCHEMA_POLL_INTERVAL_MS: {{ .Values.config.schemaPollIntervalMs | quote }}
+  JAVA_TOOL_OPTIONS: {{ .Values.backend.javaOpts | quote }}

@@ -1,0 +1,14 @@
+Glidelike is deploying: {{ .Values.backend.replicas }} backend replicas, {{ .Values.frontend.replicas }} frontend replicas, Postgres via {{ .Values.postgres.mode }}.
+
+Watch the rollout:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "glidelike.backend.fullname" . }}
+
+{{- if .Values.ingress.enabled }}
+
+Open the app through the Ingress (on a `make up` kind cluster: http://localhost:8000).
+{{- end }}
+
+Or port-forward the frontend directly:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "glidelike.frontend.fullname" . }} 8000:80
+
+Demo users (password = username): admin, alice, bob, carol.

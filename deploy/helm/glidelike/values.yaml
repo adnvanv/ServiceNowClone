@@ -1,0 +1,119 @@
+# Default values for glidelike. Values for local kind clusters live in
+# values-kind.yaml; for EKS + RDS, Terraform passes its own overrides.
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+backend:
+  image:
+    repository: ghcr.io/adnvanv/servicenowclone-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  # Three replicas from the start: proves the platform is stateless apart
+  # from Postgres (sessions are JWTs, the schema cache is synchronised through
+  # sys_schema_version) and that concurrent startup (Flyway + seeding) is safe.
+  replicas: 3
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 384Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+
+  # The JVM sizes its heap from the container limit, not the node's RAM.
+  javaOpts: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+
+  # Keep at least two backends up during voluntary disruptions (node drains,
+  # cluster upgrades).
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+  # Seconds a terminating pod keeps serving after it is removed from the
+  # Service endpoints, so in-flight and just-routed requests are not dropped.
+  preStopSleepSeconds: 5
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+frontend:
+  image:
+    repository: ghcr.io/adnvanv/servicenowclone-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 2
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Non-secret application settings, rendered into a ConfigMap.
+config:
+  seedDemoData: true
+  jwtExpiryMinutes: 480
+  schemaPollIntervalMs: 1000
+
+# Secret material. Leave empty to have the chart generate random values on
+# first install (and keep them across upgrades). In production, pass them in
+# from a secret manager instead, or point existingSecret at one you manage.
+secrets:
+  existingSecret: ""     # must contain key PLATFORM_JWT_SECRET
+  jwtSecret: ""
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  # Empty host = match any host (handy for localhost and raw load-balancer DNS).
+  host: ""
+  tls: []
+
+postgres:
+  # cloudnativepg: the chart creates a CloudNativePG `Cluster` (operator must
+  #                already be installed — `make up` and CI do this).
+  # external:      use an existing database, e.g. Amazon RDS.
+  mode: cloudnativepg
+  database: platform
+  username: platform
+  # Leave empty to generate one (cloudnativepg) — required for external.
+  password: ""
+  existingSecret: ""     # basic-auth secret with keys username/password
+
+  cloudnativepg:
+    instances: 1         # 3 gives a primary + 2 streaming replicas with automatic failover
+    imageName: ghcr.io/cloudnative-pg/postgresql:16
+    storage:
+      size: 2Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+
+  external:
+    host: ""
+    port: 5432
+    sslMode: require

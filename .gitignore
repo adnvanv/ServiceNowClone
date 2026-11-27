@@ -5,3 +5,11 @@ dist/
 *.iml
 .vscode/
 .DS_Store
+
+# Terraform: keep .terraform.lock.hcl (pins provider versions), ignore the rest
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+crash.log

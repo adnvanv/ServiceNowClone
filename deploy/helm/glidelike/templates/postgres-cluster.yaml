@@ -1,0 +1,28 @@
+{{- if eq .Values.postgres.mode "cloudnativepg" }}
+{{- $pg := .Values.postgres.cloudnativepg }}
+# A CloudNativePG-managed Postgres. The operator runs the pods, handles
+# failover between instances, and exposes <name>-rw (primary) / <name>-ro
+# Services. Increase `instances` for streaming replicas with automatic failover.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "glidelike.pgClusterName" . }}
+  labels:
+    {{- include "glidelike.labels" . | nindent 4 }}
+spec:
+  instances: {{ $pg.instances }}
+  imageName: {{ $pg.imageName }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgres.database }}
+      owner: {{ .Values.postgres.username }}
+      secret:
+        name: {{ include "glidelike.dbSecretName" . }}
+  storage:
+    size: {{ $pg.storage.size }}
+    {{- with $pg.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  resources:
+    {{- toYaml $pg.resources | nindent 4 }}
+{{- end }}

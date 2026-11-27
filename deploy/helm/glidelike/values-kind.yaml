@@ -1,0 +1,12 @@
+# Overrides for a local kind cluster: images are built locally and loaded
+# straight into the node with `kind load docker-image`, so never pull them.
+backend:
+  image:
+    repository: glidelike-backend
+    tag: dev
+    pullPolicy: Never
+frontend:
+  image:
+    repository: glidelike-frontend
+    tag: dev
+    pullPolicy: Never
