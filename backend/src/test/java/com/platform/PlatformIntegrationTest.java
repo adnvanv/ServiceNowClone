@@ -16,6 +16,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import com.platform.bootstrap.DemoDataSeeder;
+import com.platform.core.error.NotFoundException;
+import com.platform.core.metadata.DictionaryService;
+import com.platform.core.metadata.SchemaCache;
 
 import java.util.List;
 import java.util.Map;
@@ -26,6 +30,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * End-to-end tests over HTTP against a real Postgres. The demo seed runs
@@ -42,6 +47,12 @@ class PlatformIntegrationTest {
 
     @Autowired
     private JdbcTemplate rawJdbc;
+
+    @Autowired
+    private DictionaryService dictionary;
+
+    @Autowired
+    private DemoDataSeeder seeder;
 
     private String adminToken;
     private String aliceToken;
@@ -413,6 +424,62 @@ class PlatformIntegrationTest {
                             "fields", List.of(Map.of("element", "winner", "label", "Winner",
                                     "type", "string"))))
                     .getStatusCode();
+        }
+    }
+
+    /**
+     * The platform runs as several replicas in Kubernetes. These tests
+     * simulate a second replica in-process: its own SchemaCache over the same
+     * database, and the seeder run concurrently as if several pods booted.
+     */
+    @Nested
+    class MultiReplica {
+
+        @Test
+        void schemaChangeOnOneReplicaIsVisibleOnAnother() {
+            SchemaCache otherReplica = new SchemaCache(dictionary);
+            assertThat(otherReplica.table("replica_probe")).isEmpty(); // loads its snapshot now
+
+            assertThat(call(HttpMethod.POST, "/api/now/meta/table", adminToken,
+                    Map.of("name", "replica_probe", "label", "Replica probe",
+                            "fields", List.of(Map.of("element", "note", "label", "Note",
+                                    "type", "string"))))
+                    .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+            // A plain lookup on the stale replica does not hit the database...
+            assertThat(otherReplica.table("replica_probe")).isEmpty();
+            // ...but require() re-checks sys_schema_version on a miss, so
+            // "create on pod A, query on pod B" works without waiting for a poll.
+            assertThat(otherReplica.require("replica_probe").name()).isEqualTo("replica_probe");
+            // and a later poll is then a no-op
+            assertThat(otherReplica.refreshIfStale()).isFalse();
+            // genuinely unknown tables still 404
+            assertThatThrownBy(() -> otherReplica.require("never_created"))
+                    .isInstanceOf(NotFoundException.class);
+        }
+
+        @Test
+        void concurrentSeedersDoNotDuplicateDemoData() throws Exception {
+            ExecutorService pool = Executors.newFixedThreadPool(3);
+            try {
+                CountDownLatch start = new CountDownLatch(1);
+                List<Future<?>> runs = List.of(
+                        pool.submit(() -> { start.await(); seeder.seed(); return null; }),
+                        pool.submit(() -> { start.await(); seeder.seed(); return null; }),
+                        pool.submit(() -> { start.await(); seeder.seed(); return null; }));
+                start.countDown();
+                for (Future<?> run : runs) {
+                    run.get();
+                }
+            } finally {
+                pool.shutdownNow();
+            }
+            assertThat(rawJdbc.queryForObject(
+                    "select count(*) from sys_user where user_name = 'admin'", Integer.class))
+                    .isEqualTo(1);
+            assertThat(rawJdbc.queryForObject(
+                    "select count(*) from sys_db_object where name = 'task'", Integer.class))
+                    .isEqualTo(1);
         }
     }
 }

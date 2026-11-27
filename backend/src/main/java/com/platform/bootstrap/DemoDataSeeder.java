@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
@@ -62,11 +63,47 @@ public class DemoDataSeeder {
         this.enabled = enabled;
     }
 
+    /** Arbitrary key for the session-level advisory lock that serialises seeding across replicas. */
+    static final long SEED_LOCK_KEY = 0x5EED_DA7AL;
+
+    /**
+     * Runs once per replica at startup. With several replicas starting at the
+     * same moment (a Kubernetes Deployment with replicas: 3), the naive
+     * "check whether task exists, then seed" is a race: every pod sees an
+     * empty schema and they all seed. Flyway already serialises its
+     * migrations with its own advisory lock, but this seeder runs after
+     * Flyway and is application code, so it needs a lock of its own.
+     *
+     * A session-level pg_advisory_lock is held on one dedicated connection
+     * for the whole seed (which spans many transactions, so the
+     * transaction-scoped lock the schema service uses would not cover it).
+     * The first pod seeds; the others block, then re-check under the lock,
+     * find the data, and skip. If the seeding pod dies mid-way, Postgres
+     * drops its session and releases the lock automatically.
+     */
     @EventListener(ApplicationReadyEvent.class)
     public void seed() {
         if (!enabled) {
             return;
         }
+        jdbc.getJdbcTemplate().execute((ConnectionCallback<Void>) con -> {
+            try (var st = con.prepareStatement("select pg_advisory_lock(?)")) {
+                st.setLong(1, SEED_LOCK_KEY);
+                st.execute();
+            }
+            try {
+                seedIfEmpty();
+            } finally {
+                try (var st = con.prepareStatement("select pg_advisory_unlock(?)")) {
+                    st.setLong(1, SEED_LOCK_KEY);
+                    st.execute();
+                }
+            }
+            return null;
+        });
+    }
+
+    private void seedIfEmpty() {
         cache.reload();
         if (cache.table("task").isPresent()) {
             log.info("Demo data already present, skipping seed");

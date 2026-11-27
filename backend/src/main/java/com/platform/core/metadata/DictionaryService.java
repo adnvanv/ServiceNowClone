@@ -26,6 +26,23 @@ public class DictionaryService {
         this.jdbc = jdbc;
     }
 
+    /** The committed schema version — one primary-key lookup, cheap enough to poll. */
+    public long schemaVersion() {
+        Long v = jdbc.getJdbcTemplate().queryForObject(
+                "select version from sys_schema_version where id = 1", Long.class);
+        return v != null ? v : 0L;
+    }
+
+    /**
+     * Bump the schema version. Must be called inside the schema-mutation
+     * transaction so other replicas see the new version only once the DDL and
+     * metadata it describes have committed.
+     */
+    public void bumpSchemaVersion() {
+        jdbc.getJdbcTemplate().update(
+                "update sys_schema_version set version = version + 1 where id = 1");
+    }
+
     /** Load the whole metadata graph in three queries. Called only on reload. */
     public SchemaSnapshot loadSnapshot() {
         List<FieldDefinition> allFields = jdbc.query("""
