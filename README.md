@@ -121,7 +121,7 @@ Every push proves the deployment works, and nothing is left running afterwards.
 installs **the same Helm chart**:
 
 - **VPC** across two AZs with public, private and isolated database subnets (one NAT gateway, to keep cost down)
-- **EKS** (managed node group, 2 × t3.medium) with Traefik behind an AWS load balancer, plus metrics-server
+- **EKS** (managed node group, 2 × m7i-flex.large) with Traefik behind an AWS load balancer, plus metrics-server. `m7i-flex.large` is chosen because it is one of the few instance types a new account on the AWS Free plan can launch. Bigger types fail with *"instance type is not eligible for Free Tier"*.
 - **RDS PostgreSQL 16** (`db.t4g.micro`, encrypted, not publicly accessible) in the database subnets. Its security group only admits the EKS node security group on 5432. The chart runs in `postgres.mode=external` with `sslmode=require`.
 - An optional **AWS Budgets** alert. Set `budget_alert_email` before your first apply.
 
@@ -136,6 +136,18 @@ BASE_URL=$(terraform output -raw app_url) ./scripts/smoke-test.sh
 
 terraform destroy                              # always finish with this
 ```
+
+### Verified on AWS
+
+This was applied to a real AWS account (us-east-1) and then destroyed. Two
+EKS nodes in two availability zones, RDS PostgreSQL 16, and the same chart
+and tests as CI. One replica migrated and seeded RDS while the other two
+skipped. The smoke test passed through the AWS load balancer, and deleting a
+backend pod under load dropped none of the 619 requests:
+
+![EKS cluster](docs/screenshots/aws-cluster.png)
+
+![Smoke and chaos tests on AWS](docs/screenshots/aws-smoke-chaos.png)
 
 **Cost:** the EKS control plane is about $0.10/hour, plus two small nodes,
 the NAT gateway, the load balancer and a micro RDS instance. That comes to

@@ -17,9 +17,9 @@ variable "kubernetes_version" {
 }
 
 variable "node_instance_type" {
-  description = "Instance type for the EKS managed node group. t3.medium (2 vCPU / 4 GiB) fits 3 backends + frontend + add-ons on two nodes."
+  description = "Instance type for the EKS managed node group. m7i-flex.large (2 vCPU / 8 GiB) fits 3 backends + frontend + add-ons on two nodes, and is one of the few types an AWS Free-plan account is allowed to launch."
   type        = string
-  default     = "t3.medium"
+  default     = "m7i-flex.large"
 }
 
 variable "node_count" {
