@@ -7,7 +7,10 @@ COPY . .
 RUN npm run build
 
 # Serve stage
-FROM nginx:alpine
+# Unprivileged variant: runs as uid 101 and listens on 8080, so the pod can
+# run with runAsNonRoot and no capabilities.
+FROM nginxinc/nginx-unprivileged:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+ENV BACKEND_URL=http://backend:8080
+EXPOSE 8080
