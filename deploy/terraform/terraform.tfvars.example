@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (git-ignored) and adjust.
+region             = "us-east-1"
+budget_alert_email = "you@example.com" # set this BEFORE the first apply
+budget_limit_usd   = 20
+image_tag          = "latest" # or a CI tag such as sha-0123456789ab
+# ghcr_pull_token  = "ghp_..."         # only if the GHCR packages are private
