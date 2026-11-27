@@ -1,0 +1,12 @@
+# Local cluster for `make up` and CI.
+# The ingress controller (Traefik) listens on NodePort 30080 inside the node;
+# this maps it to localhost:8000 on the host, so the Ingress is reachable at
+# http://localhost:8000 with no port-forward.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8000
+        protocol: TCP

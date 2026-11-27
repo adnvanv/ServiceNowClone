@@ -10,5 +10,8 @@ RUN mvn -q -DskipTests package
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
+# Run as an unprivileged user (matches runAsUser in the Helm chart).
+RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app app
+USER 10001
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]

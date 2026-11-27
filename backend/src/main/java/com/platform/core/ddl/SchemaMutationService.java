@@ -115,6 +115,7 @@ public class SchemaMutationService {
                     ? DdlGenerator.createRootTable(tenant.schema(), name, columns)
                     : DdlGenerator.createChildTable(tenant.schema(), name, parent.name(), columns);
             jdbc.getJdbcTemplate().execute(ddl);
+            dictionary.bumpSchemaVersion();
         });
 
         schemaCache.reload();
@@ -137,6 +138,7 @@ public class SchemaMutationService {
             ColumnSpec spec = insertFieldMetadata(table.sysId(), req, user);
             jdbc.getJdbcTemplate().execute(
                     DdlGenerator.addColumn(tenant.schema(), table.name(), spec));
+            dictionary.bumpSchemaVersion();
         });
 
         schemaCache.reload();
@@ -158,6 +160,7 @@ public class SchemaMutationService {
             }
             dictionary.insertChoice(field.tableId(), element, choice.value(), choice.label(),
                     choice.sequence() != null ? choice.sequence() : 0, user.username());
+            dictionary.bumpSchemaVersion();
         });
         schemaCache.reload();
     }

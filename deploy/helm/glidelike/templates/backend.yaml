@@ -1,0 +1,212 @@
+{{- $b := .Values.backend }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "glidelike.backend.fullname" . }}
+  labels:
+    {{- include "glidelike.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  {{- /*
+  With the HPA on, the HPA owns the replica count. Setting `replicas` on
+  every upgrade would snap a scaled-out Deployment back to the default, so
+  it is only set on first install (or when autoscaling is off).
+  */}}
+  {{- if or (not $b.autoscaling.enabled) .Release.IsInstall }}
+  replicas: {{ $b.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never dip below current capacity during a rollout
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "glidelike.selectorLabels" (dict "root" . "component" "backend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "glidelike.labels" . | nindent 8 }}
+        app.kubernetes.io/component: backend
+      annotations:
+        # Roll the pods when config or secrets change.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with $b.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Wait for Postgres to accept TCP connections so a fresh install does
+        # not show a wall of CrashLoopBackOff while the database boots.
+        - name: wait-for-db
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - >-
+              until nc -z -w 2 {{ include "glidelike.dbHost" . }} {{ include "glidelike.dbPort" . }};
+              do echo waiting for database; sleep 2; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 50m, memory: 32Mi }
+      containers:
+        - name: backend
+          image: "{{ $b.image.repository }}:{{ $b.image.tag }}"
+          imagePullPolicy: {{ $b.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: {{ include "glidelike.fullname" . }}-config
+            - secretRef:
+                name: {{ include "glidelike.appSecretName" . }}
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "glidelike.dbSecretName" . }}
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "glidelike.dbSecretName" . }}
+                  key: password
+          # Spring Boot Actuator health groups (see application.yml):
+          #   /actuator/health/liveness  - is the JVM alive? No DB check, so a
+          #                                DB outage never restart-loops pods.
+          #   /actuator/health/readiness - can it serve traffic? Includes DB.
+          startupProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 3
+            failureThreshold: 60   # up to 3 min for Flyway + first-boot seeding
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # Endpoint removal propagates asynchronously; keep serving for a
+              # few seconds so nothing is routed to a pod that already stopped.
+              # Spring's graceful shutdown then drains in-flight requests.
+              exec:
+                command: ["sh", "-c", "sleep {{ $b.preStopSleepSeconds }}"]
+          resources:
+            {{- toYaml $b.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      # Spread replicas across nodes and zones when there is more than one.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "glidelike.selectorLabels" (dict "root" . "component" "backend") | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "glidelike.selectorLabels" (dict "root" . "component" "backend") | nindent 14 }}
+      {{- with $b.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $b.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $b.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "glidelike.backend.fullname" . }}
+  labels:
+    {{- include "glidelike.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "glidelike.selectorLabels" (dict "root" . "component" "backend") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+{{- if $b.autoscaling.enabled }}
+---
+# Adds backend replicas when average CPU (relative to the *request*) passes
+# the target. Needs metrics-server in the cluster (`make up` installs it).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "glidelike.backend.fullname" . }}
+  labels:
+    {{- include "glidelike.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "glidelike.backend.fullname" . }}
+  minReplicas: {{ $b.autoscaling.minReplicas }}
+  maxReplicas: {{ $b.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $b.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      # JVM startup is expensive, so do not flap replicas on short CPU dips.
+      stabilizationWindowSeconds: 300
+{{- end }}
+{{- if $b.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "glidelike.backend.fullname" . }}
+  labels:
+    {{- include "glidelike.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  minAvailable: {{ $b.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "glidelike.selectorLabels" (dict "root" . "component" "backend") | nindent 6 }}
+{{- end }}

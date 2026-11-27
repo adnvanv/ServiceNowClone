@@ -1,6 +1,8 @@
 spring:
   application:
     name: platform
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/platform}
     username: ${DB_USER:platform}
@@ -11,6 +13,26 @@ spring:
 
 server:
   port: 8080
+  # Finish in-flight requests on SIGTERM instead of dropping them; paired with
+  # the pod's preStop delay this makes rolling updates and pod deletions
+  # invisible to clients.
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      # /actuator/health/liveness and /actuator/health/readiness for Kubernetes.
+      # Liveness deliberately excludes the database: a DB outage should take
+      # pods out of rotation (readiness), not restart-loop every replica.
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
 
 platform:
   jwt:
@@ -19,3 +41,6 @@ platform:
     expiry-minutes: ${PLATFORM_JWT_EXPIRY_MINUTES:480}
   seed:
     demo-data: ${PLATFORM_SEED_DEMO_DATA:true}
+  schema:
+    # How often each replica checks sys_schema_version for changes made on another replica.
+    poll-interval-ms: ${PLATFORM_SCHEMA_POLL_INTERVAL_MS:1000}

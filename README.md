@@ -1,5 +1,7 @@
 # Glidelike — a metadata-driven application platform
 
+[![CI](https://github.com/adnvanv/ServiceNowClone/actions/workflows/ci.yml/badge.svg)](https://github.com/adnvanv/ServiceNowClone/actions/workflows/ci.yml)
+
 Define a table and its fields **at runtime** and immediately get a working
 REST API, a list view, a form view and enforced access control — with zero
 code written for that specific table. No entity classes, no controllers, no
@@ -47,6 +49,111 @@ The database is seeded on first start with a `task` table, an
 platform's own APIs, which is the proof that the machinery works.
 
 The API is on **http://localhost:8080**.
+
+## Running on Kubernetes
+
+The same app ships as a Helm chart ([`deploy/helm/glidelike`](deploy/helm/glidelike))
+and runs on a local [kind](https://kind.sigs.k8s.io/) cluster with one command:
+
+```bash
+make up      # kind cluster -> add-ons -> build images -> kind load -> helm install
+make smoke   # log in, create a table at runtime, insert + query it through the Ingress
+make chaos   # delete a backend pod under load; fails on a single dropped request
+make down    # delete the cluster
+```
+
+Then open **http://localhost:8000**. You need Docker, kind, kubectl, Helm and
+make (on Windows, run it from Git Bash).
+
+![Cluster](docs/screenshots/k8s-cluster.png)
+
+What the chart deploys:
+
+| piece | details |
+|---|---|
+| Backend | Deployment, **3 replicas**, rolling updates with `maxUnavailable: 0`, PodDisruptionBudget (`minAvailable: 2`), non-root, CPU and memory requests and limits |
+| Probes | Spring Boot Actuator: startup and liveness on `/actuator/health/liveness` (JVM only, so a DB outage never restart-loops pods), readiness on `/actuator/health/readiness` (includes the DB) |
+| Autoscaling | HPA on CPU (70% of request, 3 to 6 replicas, 5-minute scale-down stabilisation); metrics-server is installed by `make up` |
+| Frontend | nginx-unprivileged Deployment, 2 replicas |
+| Ingress | `/api` goes to the backend Service, everything else to the frontend; Traefik is the controller |
+| Config | ConfigMap for settings; Secrets for the JWT key and DB credentials, generated on first install and preserved across `helm upgrade` via `lookup` |
+| Database | `postgres.mode=cloudnativepg`: a [CloudNativePG](https://cloudnative-pg.io/) `Cluster` managed by the operator (set `instances: 3` for streaming replicas with automatic failover). `postgres.mode=external`: any Postgres, e.g. RDS (see below) |
+| Shutdown | `preStop` sleep plus `server.shutdown=graceful`, so a terminating pod drains in-flight requests before exiting |
+
+### Three replicas booting at once
+
+Running more than one copy surfaced three pieces of startup and in-memory
+state that had assumed a single process
+([ADR-0005](docs/adr/0005-running-as-multiple-replicas.md)):
+
+- **Flyway** takes a Postgres advisory lock while migrating, so one pod
+  migrates and the others wait, then find nothing to do. No change needed.
+- **The demo seeder** was check-then-act ("no `task` table? seed"), which is a
+  race when every pod starts on an empty database. It now holds a
+  session-level `pg_advisory_lock` for the whole seed, and the losers re-check
+  under the lock and skip. The startup logs above show it: one pod applied the
+  migrations and seeded, the other two skipped.
+- **The schema cache** is per-pod memory, so a table created through pod A
+  returned 404 from pods B and C. Every schema change now bumps
+  `sys_schema_version` in the same transaction as its DDL. Pods poll that row
+  every second, and a cache miss re-checks it before answering 404.
+
+![Smoke and chaos tests](docs/screenshots/k8s-smoke-chaos.png)
+
+## CI: a real deployment on every push
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push:
+
+1. Backend unit and Testcontainers integration tests, frontend lint and build, `helm lint`.
+2. Builds both images and pushes them to GitHub Container Registry (`sha-<commit>`, plus `latest` on `main`).
+3. Starts a throwaway kind cluster inside the runner (`helm/kind-action`) and installs the add-ons.
+4. `helm install` from the just-pushed GHCR images, then waits for the rollout.
+5. Checks the concurrent startup: at most one replica seeded.
+6. [`scripts/smoke-test.sh`](scripts/smoke-test.sh): log in, create a table, insert a record, query it.
+7. [`scripts/chaos-test.sh`](scripts/chaos-test.sh): deletes a backend pod under load and requires zero failed requests.
+8. Terraform `fmt -check` and `validate` (plus `plan` when an AWS role is configured; never `apply`).
+
+Every push proves the deployment works, and nothing is left running afterwards.
+
+## Deploying to AWS
+
+[`deploy/terraform`](deploy/terraform) creates a real cloud environment and
+installs **the same Helm chart**:
+
+- **VPC** across two AZs with public, private and isolated database subnets (one NAT gateway, to keep cost down)
+- **EKS** (managed node group, 2 × m7i-flex.large) with Traefik behind an AWS load balancer, plus metrics-server. `m7i-flex.large` is chosen because it is one of the few instance types a new account on the AWS Free plan can launch. Bigger types fail with *"instance type is not eligible for Free Tier"*.
+- **RDS PostgreSQL 16** (`db.t4g.micro`, encrypted, not publicly accessible) in the database subnets. Its security group only admits the EKS node security group on 5432. The chart runs in `postgres.mode=external` with `sslmode=require`.
+- An optional **AWS Budgets** alert. Set `budget_alert_email` before your first apply.
+
+```bash
+cd deploy/terraform
+cp terraform.tfvars.example terraform.tfvars   # set budget_alert_email first
+terraform init
+terraform apply                                # ~15-20 min, mostly EKS + RDS
+$(terraform output -raw kubeconfig_command)    # point kubectl at the cluster
+terraform output app_url                       # open it; admin/admin
+BASE_URL=$(terraform output -raw app_url) ./scripts/smoke-test.sh
+
+terraform destroy                              # always finish with this
+```
+
+### Verified on AWS
+
+This was applied to a real AWS account (us-east-1) and then destroyed. Two
+EKS nodes in two availability zones, RDS PostgreSQL 16, and the same chart
+and tests as CI. One replica migrated and seeded RDS while the other two
+skipped. The smoke test passed through the AWS load balancer, and deleting a
+backend pod under load dropped none of the 619 requests:
+
+![EKS cluster](docs/screenshots/aws-cluster.png)
+
+![Smoke and chaos tests on AWS](docs/screenshots/aws-smoke-chaos.png)
+
+**Cost:** the EKS control plane is about $0.10/hour, plus two small nodes,
+the NAT gateway, the load balancer and a micro RDS instance. That comes to
+roughly $0.30-0.40/hour in us-east-1, so an afternoon of testing costs a few
+dollars. Images are pulled from GHCR: either make the two packages public,
+or pass a `read:packages` token as `ghcr_pull_token`.
 
 ## API in 60 seconds
 
